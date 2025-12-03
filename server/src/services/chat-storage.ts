@@ -90,6 +90,19 @@ class ChatStorage {
     }
     return true;
   }
+
+  clearAll(): void {
+    this.chats.clear();
+    this.userChats.clear();
+  }
+
+  clearUserChats(userId: string): void {
+    const chatIds = this.userChats.get(userId) || [];
+    for (const chatId of chatIds) {
+      this.chats.delete(chatId);
+    }
+    this.userChats.delete(userId);
+  }
 }
 
 export const chatStorage = new ChatStorage();
