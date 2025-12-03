@@ -2,10 +2,10 @@ import {ChatSidebar} from "../components/chat-sidebar";
 import {ChatInputBox} from "../components/chat-input-box";
 import {MessageDisplay, AssistantLoadingIndicator} from "../components/message";
 import {useChats, useChat} from "../data/queries/chat";
-import {useCreateChat, useSendMessage} from "../data/mutations/chat";
+import {useCreateChat, useSendMessage, useStreamMessage} from "../data/mutations/chat";
 import {ChatMessage} from "../types";
 import {useChatState} from "../hooks/use-chat-state";
-import {useEffect, useRef} from "react";
+import {useEffect, useRef, useState} from "react";
 import {useToast} from "../components/ui/toast";
 import Spinner from "../components/ui/spinner";
 import {ModelSelector} from "../components/model-selector";
@@ -16,14 +16,16 @@ export function HomePage () {
     const chatQuery = useChat(selectedChatId);
     const createChatMutation = useCreateChat();
     const sendMessageMutation = useSendMessage();
+    const { streamMessage, isStreaming, streamingContent, streamError } = useStreamMessage();
     const { showToast } = useToast();
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
 
     useEffect(() => {
         if (chatQuery.data && chatQuery.data.messages.length > 0) {
             messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
-    }, [chatQuery.data?.messages.length]);
+    }, [chatQuery.data?.messages.length, streamingContent]);
 
     useEffect(() => {
         if (!selectedChatId) return;
@@ -50,18 +52,37 @@ export function HomePage () {
             showToast('Please select or create a chat first', 'error');
             return;
         }
+        
+        const tempMessageId = `streaming-${Date.now()}`;
+        setStreamingMessageId(tempMessageId);
+        
         try {
-            await sendMessageMutation.mutateAsync({ chatId: selectedChatId, message });
+            await streamMessage(selectedChatId, message, (token, fullContent) => {
+                setStreamingMessageId(tempMessageId);
+            });
+            setStreamingMessageId(null);
         } catch (error) {
+            setStreamingMessageId(null);
             const errorMessage = error instanceof Error ? error.message : 'Failed to send message';
-            showToast(errorMessage, 'error');
+            
+            if (streamError) {
+                showToast(streamError, 'error');
+            } else {
+                showToast('Streaming failed, falling back to regular message', 'error');
+                try {
+                    await sendMessageMutation.mutateAsync({ chatId: selectedChatId, message });
+                } catch (fallbackError) {
+                    const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : 'Failed to send message';
+                    showToast(fallbackMessage, 'error');
+                }
+            }
         }
     };
 
     const messages: ChatMessage[] = chatQuery.data?.messages || [];
     const isSendingForThisChat =
-        sendMessageMutation.isPending &&
-        sendMessageMutation.variables?.chatId === selectedChatId;
+        (sendMessageMutation.isPending && sendMessageMutation.variables?.chatId === selectedChatId) ||
+        (isStreaming && streamingMessageId !== null);
     const isLoading = isSendingForThisChat || chatQuery.isFetching;
 
     if (chatsQuery.isLoading) {
@@ -88,6 +109,8 @@ export function HomePage () {
                     chatName={chatQuery.data?.name || 'Chat'}
                     chatId={selectedChatId}
                     isChatLoading={chatQuery.isLoading}
+                    streamingContent={isStreaming && streamingMessageId ? streamingContent : null}
+                    streamError={streamError}
                 />
             ) : (
                 <div className="flex flex-col items-center justify-center h-96">
@@ -105,7 +128,9 @@ function ChatWindow ({
     isLoading,
     chatName,
     chatId,
-    isChatLoading
+    isChatLoading,
+    streamingContent,
+    streamError
 }: { 
     messages: ChatMessage[]; 
     onSend: (message: string) => void;
@@ -113,12 +138,14 @@ function ChatWindow ({
     chatName: string;
     chatId: string;
     isChatLoading?: boolean;
+    streamingContent?: string | null;
+    streamError?: string | null;
 }) {
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages.length, isLoading]);
+    }, [messages.length, isLoading, streamingContent]);
 
     return <div className={"flex flex-col gap-4 h-[calc(100vh-12rem)]"}>
         <div className="flex items-center justify-between">
@@ -157,7 +184,17 @@ function ChatWindow ({
                     />
                 );
             })}
-            {isLoading && <AssistantLoadingIndicator />}
+            {streamingContent && (
+                <MessageDisplay 
+                    message={{ role: 'assistant', content: streamingContent }}
+                />
+            )}
+            {streamError && (
+                <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+                    {streamError}
+                </div>
+            )}
+            {isLoading && !streamingContent && <AssistantLoadingIndicator />}
             <div ref={messagesEndRef} />
         </div>
         <ChatInputBox onSend={onSend} disabled={isLoading} />
