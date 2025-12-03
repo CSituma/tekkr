@@ -393,6 +393,310 @@ const chat: FastifyPluginAsync = async (fastify, opts): Promise<void> => {
     reply.send(chat);
   });
 
+  fastify.delete('/clear', async function (request, reply) {
+    const userId = request.userId;
+    chatStorage.clearUserChats(userId);
+    reply.send({ message: 'All chats cleared' });
+  });
+
+  fastify.options('/:chatId/message/stream', async function (request, reply) {
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    reply.code(204).send();
+  });
+
+  fastify.post('/:chatId/message/stream', async function (request, reply) {
+    const { chatId } = request.params as { chatId: string };
+    const userId = request.userId;
+    const { message } = request.body as SendMessageRequest;
+
+    if (!message || typeof message !== 'string') {
+      reply.status(400).send({ error: 'Message is required' });
+      return;
+    }
+
+    const chat = chatStorage.getChat(chatId);
+    if (!chat) {
+      reply.status(404).send({ error: 'Chat not found' });
+      return;
+    }
+
+    if (chat.userId !== userId) {
+      reply.status(403).send({ error: 'Forbidden' });
+      return;
+    }
+
+    chatStorage.addMessage(chatId, { role: 'user', content: message });
+
+    const updatedChat = chatStorage.getChat(chatId);
+    if (!updatedChat) {
+      reply.status(500).send({ error: 'Failed to update chat' });
+      return;
+    }
+
+    // Hijack the response before setting headers
+    reply.hijack();
+    
+    // Set headers on the raw response
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    });
+
+    const sendSSE = (event: string, data: string) => {
+      const message = `event: ${event}\ndata: ${data}\n\n`;
+      reply.raw.write(message);
+      // Force flush to ensure real-time streaming
+      if (typeof (reply.raw as any).flush === 'function') {
+        (reply.raw as any).flush();
+      }
+    };
+
+    try {
+      const conversation = updatedChat.messages.map(m => ({
+        role: m.role,
+        content: m.content
+      }));
+
+      const baseSystemPrompt = {
+        role: 'system' as const,
+        content: `You are a professional project planning assistant. Your job is to help users think in terms of structured, actionable plans.
+
+APPROACH:
+- Be direct and concise.
+- First, respond conversationally in 2–6 sentences: clarify, summarise, and give 1–3 concrete suggestions.
+- Always think in terms of deliverables, timelines, and outcomes, but do NOT always output a full project plan.
+- If the user explicitly asks for a "project plan", "roadmap", "implementation plan" or similar, then a structured project plan is appropriate.
+- If the user describes goals, challenges, or long-term outcomes (e.g. "be the best coffee shop in Kenya by 2026") but does NOT explicitly ask for a plan:
+  - Give a short, insightful response.
+  - Then explicitly OFFER: "If you'd like, I can turn this into a detailed project plan with workstreams and deliverables."`
+      };
+
+      const hasExplicitPlanKeyword = /project\s+plan|create\s+(?:a\s+)?plan|plan\s+for|write\s+(?:me\s+)?a\s+plan|roadmap|implementation\s+plan|transition.*business|business.*plan|show.*plan|present.*plan|need\s+a\s+plan(?:\s+(?:for|to))?|want\s+a\s+plan(?:\s+(?:for|to))?/i.test(
+        message
+      );
+      
+      const lastAssistantMessage = conversation
+        .filter(m => m.role === 'assistant')
+        .pop();
+      const assistantOfferedPlan =
+        lastAssistantMessage &&
+        /turn this into a detailed project plan|generate a project plan|create a detailed project plan|turn this into a project plan/i.test(
+          lastAssistantMessage.content
+        );
+
+      const userAffirmative = /\b(yes|yeah|yep|sure|sounds good|do it|go ahead|let'?s do it|okay|ok|alright|please|that would be great|absolutely)\b/i.test(
+        message.trim()
+      );
+      const userNegative = /\b(no|nope|nah|not now|maybe later|don'?t|do not|no thanks|no thank you)\b/i.test(
+        message.trim()
+      );
+
+      const userAcceptedPlanOffer = assistantOfferedPlan && userAffirmative && !userNegative;
+      
+      let planGoal = message;
+      if (userAcceptedPlanOffer || (hasExplicitPlanKeyword && message.toLowerCase().includes('create a project plan for:'))) {
+        const originalUserMessage = conversation
+          .filter(m => m.role === 'user')
+          .find(m => 
+            !m.content.toLowerCase().includes('create a project plan') &&
+            !m.content.toLowerCase().includes('generate project plan') &&
+            !m.content.toLowerCase().includes('plan for this conversation')
+          );
+        
+        if (originalUserMessage) {
+          planGoal = originalUserMessage.content;
+        } else if (message.toLowerCase().includes('create a project plan for:')) {
+          const match = message.match(/create a project plan for:\s*(.+)/i);
+          if (match && match[1]) {
+            planGoal = match[1].trim();
+          }
+        }
+      }
+      
+      const isProjectPlanRequest =
+        hasExplicitPlanKeyword || userAcceptedPlanOffer;
+      
+      if (isProjectPlanRequest) {
+        conversation.unshift({
+          role: 'system',
+          content: `You are a professional project planning assistant. Your job is to create structured, actionable project plans quickly and directly.
+
+🚨 CRITICAL: YOUR RESPONSE FORMAT 🚨
+- You MUST provide the project plan as a JSON code block starting with \`\`\`json and ending with \`\`\`
+- This is the ONLY acceptable format. NO exceptions.
+- DO NOT use plain text, markdown lists, "Workstream A/B/C", or any other format.
+- If you provide a plan in any format other than JSON, your response is WRONG and will not work.
+
+APPROACH:
+- Be direct and concise. Create the plan immediately based on what the user tells you.
+- Infer missing details from context. Don't ask too many questions - make reasonable assumptions.
+- Avoid verbose templates, long explanations, or overwhelming the user with options.
+- If you need clarification, ask ONE to THREE brief questions, then create the plan.
+- Keep intro text minimal (1-5 sentences max) before the plan.
+- Keep outro text minimal (1-5 sentences max) after the plan. Questions to create better plans are welcome.
+
+FORMAT REQUIREMENT:
+- Start your response with a brief intro (1-5 sentences max).
+- Then immediately provide the plan in this EXACT format:
+\`\`\`json
+{
+  "workstreams": [...]
+}
+\`\`\`
+- That's it. The JSON block is mandatory. No plain text plans.
+- End your response with a brief outro (1-5 sentences max) with a summary of the plan and a call to action for the user to review the plan and provide feedback.
+
+Create the plan immediately. Break into workstreams (3-8 or more) with 2-5 deliverables each. Each deliverable description must be outcome-focused.`
+        });
+        
+        const lastMessage = conversation[conversation.length - 1];
+        if (lastMessage && lastMessage.role === 'user') {
+          lastMessage.content = `Create a project plan for: "${planGoal}"
+
+🚨 FORMAT REQUIREMENT: You MUST provide the plan as a JSON code block. Start with \`\`\`json, end with \`\`\`.
+
+DO NOT:
+- Provide plans as text lists, markdown, bullet points, numbered lists, or "Workstream A/B/C" format
+- Show deliverables as bullet points or numbered lists outside JSON
+- Use any format other than JSON
+
+DO:
+- Provide a brief intro (1-2 sentences max)
+- Then immediately provide the plan in JSON format:
+\`\`\`json
+{
+  "workstreams": [
+    {
+      "title": "Workstream Name",
+      "description": "One well definied sentence describing this workstream.",
+      "deliverables": [
+        {
+          "title": "Deliverable Name",
+          "description": "One well definied sentence describing this deliverable."
+        }
+      ]
+    }
+  ]
+}
+\`\`\`
+
+Keep it simple: Only title and description are required for deliverables. 
+
+CRITICAL: Deliverable descriptions must describe WHAT will be created/delivered (the outcome/result), NOT what actions to take.
+- ✅ CORRECT (outcome-focused): "A formal document outlining mission, vision, and strategic objectives"
+- ✅ CORRECT: "A comprehensive market analysis report with competitor insights"
+- ❌ WRONG (action-focused): "Draft an enablement charter" or "Create a document that..." or "Research and analyze the market"
+- Focus on the RESULT (what exists after completion), not the PROCESS (what to do)
+
+Create the plan immediately. Break into workstreams (3-8 or more) with 2-5 deliverables each. Each deliverable description must be outcome-focused.`;
+        }
+      } else {
+        conversation.unshift(baseSystemPrompt);
+      }
+
+      const model = updatedChat.model || llmService.getAvailableModels()[0];
+      const modelProvider = getProviderForModel(model);
+      if (llmService.getProvider() !== modelProvider) {
+        llmService.setProvider(modelProvider);
+      }
+      
+      let tokenCount = 0;
+      let fullResponse = '';
+      
+      try {
+        fastify.log.info({ chatId, model, messageCount: conversation.length }, 'Starting stream');
+        
+        const modelProvider = getProviderForModel(model);
+        
+        // Gemini streaming is unreliable - use non-streaming and simulate streaming
+        if (modelProvider === 'gemini') {
+          fastify.log.info('Using non-streaming for Gemini (simulated streaming)');
+          fullResponse = await llmService.sendMessage(conversation, model);
+          
+          // Simulate streaming by chunking the response
+          const chunkSize = 10; // Characters per chunk
+          for (let i = 0; i < fullResponse.length; i += chunkSize) {
+            const chunk = fullResponse.substring(i, i + chunkSize);
+            if (chunk.length > 0) {
+              tokenCount++;
+              sendSSE('token', JSON.stringify({ token: chunk }));
+              // Small delay to simulate real streaming
+              await new Promise(resolve => setTimeout(resolve, 20));
+            }
+          }
+        } else {
+          // Use real streaming for OpenAI/Groq
+          fullResponse = await llmService.streamMessage(conversation, model, (token: string) => {
+            if (!token || token.length === 0) return;
+            
+            tokenCount++;
+            
+            try {
+              // Send token immediately for real-time streaming
+              sendSSE('token', JSON.stringify({ token }));
+              if (tokenCount === 1) {
+                fastify.log.info('First token received and sent');
+              }
+            } catch (err) {
+              fastify.log.error({ err }, 'Error sending SSE token');
+              // Don't throw - continue processing even if one token fails to send
+            }
+          });
+        }
+        
+        fastify.log.info({ tokenCount, responseLength: fullResponse.length }, 'Stream completed');
+        
+        if (!fullResponse || fullResponse.length === 0) {
+          fastify.log.warn('No response received from LLM');
+          sendSSE('error', JSON.stringify({ 
+            error: 'No response from LLM', 
+            details: 'The LLM did not return any content'
+          }));
+          reply.raw.end();
+          return;
+        }
+      } catch (streamError) {
+        fastify.log.error({ error: streamError, stack: streamError instanceof Error ? streamError.stack : undefined }, 'Stream message error');
+        sendSSE('error', JSON.stringify({ 
+          error: 'Failed to get LLM response', 
+          details: streamError instanceof Error ? streamError.message : 'Unknown error'
+        }));
+        reply.raw.end();
+        return;
+      }
+
+      if (isProjectPlanRequest) {
+        fullResponse = postProcessProjectPlanResponse(fullResponse);
+      } else if (looksLikePlanResponse(fullResponse)) {
+        fullResponse = postProcessProjectPlanResponse(fullResponse);
+      }
+
+      chatStorage.addMessage(chatId, { role: 'assistant', content: fullResponse });
+
+      const finalChat = chatStorage.getChat(chatId);
+      sendSSE('done', JSON.stringify({ chat: finalChat }));
+      reply.raw.end();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      fastify.log.error({ error: errorMessage, stack: errorStack }, 'LLM stream failed');
+      
+      sendSSE('error', JSON.stringify({ 
+        error: 'Failed to get LLM response', 
+        details: errorMessage
+      }));
+      reply.raw.end();
+    }
+  });
+
   fastify.post('/:chatId/message', async function (request, reply) {
     const { chatId } = request.params as { chatId: string };
     const userId = request.userId;
