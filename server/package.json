@@ -1,0 +1,35 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "This project was bootstrapped with Fastify-CLI.",
+  "main": "app.ts",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "build:ts": "tsc",
+    "watch:ts": "tsc -w",
+    "start": "npm run build:ts && concurrently -k -p \"[{name}]\" -n \"TypeScript,App\" -c \"yellow.bold,cyan.bold\" \"npm:watch:ts\" \"npm:dev:start\"",
+    "dev:start": "fastify start -p 8000 --ignore-watch=.ts$ -w -l info -P dist/app.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@fastify/autoload": "^6.0.0",
+    "@fastify/cors": "^11.1.0",
+    "@fastify/sensible": "^6.0.0",
+    "dotenv": "^17.2.3",
+    "fastify": "^5.0.0",
+    "fastify-cli": "^7.4.0",
+    "fastify-plugin": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.1.0",
+    "c8": "^10.1.2",
+    "concurrently": "^9.0.0",
+    "fastify-tsconfig": "^3.0.0",
+    "ts-node": "^10.4.0",
+    "typescript": "~5.8.2"
+  }
+}
