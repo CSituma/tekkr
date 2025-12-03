@@ -93,3 +93,131 @@ export function extractProjectPlanBlocks(content: string): MessageContentBlock[]
   return blocks;
 }
 
+export function extractProjectPlanBlocksIncremental(
+  content: string,
+  previousState?: { buffer: string; jsonStartIndex: number | null; parsedPlans: ProjectPlan[] }
+): {
+  blocks: MessageContentBlock[];
+  state: { buffer: string; jsonStartIndex: number | null; parsedPlans: ProjectPlan[] };
+} {
+  const state = previousState || { buffer: '', jsonStartIndex: null, parsedPlans: [] };
+  const blocks: Array<{ type: 'text' | 'plan'; content: string | ProjectPlan; start: number; end: number }> = [];
+  
+  let searchStart = 0;
+  let lastProcessedIndex = 0;
+
+  const jsonBlockStartRegex = /```(?:json)?\s*(\{)/g;
+  let match;
+
+  while ((match = jsonBlockStartRegex.exec(content)) !== null) {
+    const startIndex = match.index;
+    const jsonStart = match.index + match[0].length - 1;
+
+    if (startIndex > lastProcessedIndex) {
+      blocks.push({
+        type: 'text',
+        content: content.substring(lastProcessedIndex, startIndex),
+        start: lastProcessedIndex,
+        end: startIndex,
+      });
+    }
+
+    const afterStart = content.substring(jsonStart);
+    let braceCount = 0;
+    let inString = false;
+    let escapeNext = false;
+    let jsonEndIndex = -1;
+
+    for (let i = 0; i < afterStart.length; i++) {
+      const char = afterStart[i];
+
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escapeNext = true;
+        continue;
+      }
+
+      if (char === '"' && !escapeNext) {
+        inString = !inString;
+        continue;
+      }
+
+      if (!inString) {
+        if (char === '{') {
+          braceCount++;
+        } else if (char === '}') {
+          braceCount--;
+          if (braceCount === 0) {
+            jsonEndIndex = jsonStart + i + 1;
+            break;
+          }
+        }
+      }
+    }
+
+    if (jsonEndIndex > 0) {
+      const jsonContent = content.substring(jsonStart, jsonEndIndex);
+      const closingBackticks = content.indexOf('```', jsonEndIndex);
+      
+      if (closingBackticks !== -1) {
+        try {
+          const parsed = JSON.parse(jsonContent) as ProjectPlan;
+          
+          if (parsed && Array.isArray(parsed.workstreams)) {
+            const isValid = parsed.workstreams.every(ws => 
+              typeof ws.title === 'string' &&
+              typeof ws.description === 'string' &&
+              Array.isArray(ws.deliverables) &&
+              ws.deliverables.every(d => 
+                typeof d.title === 'string' &&
+                typeof d.description === 'string'
+              )
+            );
+            
+            if (isValid) {
+              blocks.push({
+                type: 'plan',
+                content: parsed,
+                start: startIndex,
+                end: closingBackticks + 3,
+              });
+              lastProcessedIndex = closingBackticks + 3;
+              continue;
+            }
+          }
+        } catch (e) {
+        }
+      }
+    }
+
+    lastProcessedIndex = startIndex;
+  }
+
+  if (lastProcessedIndex < content.length) {
+    blocks.push({
+      type: 'text',
+      content: content.substring(lastProcessedIndex),
+      start: lastProcessedIndex,
+      end: content.length,
+    });
+  }
+
+  if (blocks.length === 0) {
+    blocks.push({
+      type: 'text',
+      content: content,
+      start: 0,
+      end: content.length,
+    });
+  }
+
+  return {
+    blocks,
+    state: { buffer: content, jsonStartIndex: null, parsedPlans: [] },
+  };
+}
+
