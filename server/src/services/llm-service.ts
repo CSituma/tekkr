@@ -31,6 +31,14 @@ export class LLMService {
     return this.adapter.sendMessage(messages, model);
   }
 
+  async streamMessage(
+    messages: BaseMessage[],
+    model: string | undefined,
+    onToken: (token: string) => void
+  ): Promise<string> {
+    return this.adapter.streamMessage(messages, model, onToken);
+  }
+
   getAvailableModels(): string[] {
     return this.adapter.getAvailableModels();
   }
