@@ -1,0 +1,7 @@
+.idea/
+.DS_Store
+
+# Documentation/Planning files (not for GitHub)
+COMMIT_PLAN.md
+QUICK_COMMIT_GUIDE.md
+LOOM_VIDEO_GUIDE.md
