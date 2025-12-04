@@ -469,13 +469,14 @@ const chat: FastifyPluginAsync = async (fastify, opts): Promise<void> => {
         content: `You are a professional project planning assistant. Your job is to help users think in terms of structured, actionable plans.
 
 APPROACH:
-- Be direct and concise.
-- First, respond conversationally in 2–6 sentences: clarify, summarise, and give 1–3 concrete suggestions.
+- Be direct and concise. Keep greetings brief (1-2 sentences max).
+- First, respond conversationally in 1–3 sentences: clarify, summarise, and give 1–2 concrete suggestions.
 - Always think in terms of deliverables, timelines, and outcomes, but do NOT always output a full project plan.
 - If the user explicitly asks for a "project plan", "roadmap", "implementation plan" or similar, then a structured project plan is appropriate.
 - If the user describes goals, challenges, or long-term outcomes (e.g. "be the best coffee shop in Kenya by 2026") but does NOT explicitly ask for a plan:
-  - Give a short, insightful response.
-  - Then explicitly OFFER: "If you'd like, I can turn this into a detailed project plan with workstreams and deliverables."`
+  - Give a short, insightful response (1-3 sentences).
+  - Then explicitly OFFER: "If you'd like, I can turn this into a detailed project plan with workstreams and deliverables."
+- IMPORTANT: Once you've offered to create a plan and the user provides information or says "ok"/"yes", STOP asking questions and generate the plan. Don't ask for more details - use what you have and make reasonable assumptions.`
       };
 
       const hasExplicitPlanKeyword = /project\s+plan|create\s+(?:a\s+)?plan|plan\s+for|write\s+(?:me\s+)?a\s+plan|roadmap|implementation\s+plan|transition.*business|business.*plan|show.*plan|present.*plan|need\s+a\s+plan(?:\s+(?:for|to))?|want\s+a\s+plan(?:\s+(?:for|to))?/i.test(
@@ -491,7 +492,7 @@ APPROACH:
           lastAssistantMessage.content
         );
 
-      const userAffirmative = /\b(yes|yeah|yep|sure|sounds good|do it|go ahead|let'?s do it|okay|ok|alright|please|that would be great|absolutely)\b/i.test(
+      const userAffirmative = /\b(yes|yeah|yep|sure|sounds good|do it|go ahead|let'?s do it|okay|ok\b|alright|please|that would be great|absolutely|sounds good|go for it|create it|make it|generate it)\b/i.test(
         message.trim()
       );
       const userNegative = /\b(no|nope|nah|not now|maybe later|don'?t|do not|no thanks|no thank you)\b/i.test(
@@ -502,20 +503,39 @@ APPROACH:
       
       let planGoal = message;
       if (userAcceptedPlanOffer || (hasExplicitPlanKeyword && message.toLowerCase().includes('create a project plan for:'))) {
-        const originalUserMessage = conversation
-          .filter(m => m.role === 'user')
-          .find(m => 
-            !m.content.toLowerCase().includes('create a project plan') &&
-            !m.content.toLowerCase().includes('generate project plan') &&
-            !m.content.toLowerCase().includes('plan for this conversation')
-          );
-        
-        if (originalUserMessage) {
-          planGoal = originalUserMessage.content;
-        } else if (message.toLowerCase().includes('create a project plan for:')) {
+        // First, try to extract from the message itself if it contains "Create a project plan for: ..."
+        if (message.toLowerCase().includes('create a project plan for:')) {
           const match = message.match(/create a project plan for:\s*(.+)/i);
           if (match && match[1]) {
             planGoal = match[1].trim();
+          } else {
+            // If extraction failed, find the most recent user message (iterate backwards)
+            const userMessages = conversation.filter(m => m.role === 'user');
+            for (let i = userMessages.length - 1; i >= 0; i--) {
+              const userMsg = userMessages[i];
+              if (
+                !userMsg.content.toLowerCase().includes('create a project plan') &&
+                !userMsg.content.toLowerCase().includes('generate project plan') &&
+                !userMsg.content.toLowerCase().startsWith('create a project plan for:')
+              ) {
+                planGoal = userMsg.content;
+                break;
+              }
+            }
+          }
+        } else {
+          // Find the most recent user message (not a plan request) - iterate backwards
+          const userMessages = conversation.filter(m => m.role === 'user');
+          for (let i = userMessages.length - 1; i >= 0; i--) {
+            const userMsg = userMessages[i];
+            if (
+              !userMsg.content.toLowerCase().includes('create a project plan') &&
+              !userMsg.content.toLowerCase().includes('generate project plan') &&
+              !userMsg.content.toLowerCase().startsWith('create a project plan for:')
+            ) {
+              planGoal = userMsg.content;
+              break;
+            }
           }
         }
       }
@@ -536,11 +556,12 @@ APPROACH:
 
 APPROACH:
 - Be direct and concise. Create the plan immediately based on what the user tells you.
-- Infer missing details from context. Don't ask too many questions - make reasonable assumptions.
-- Avoid verbose templates, long explanations, or overwhelming the user with options.
-- If you need clarification, ask ONE to THREE brief questions, then create the plan.
-- Keep intro text minimal (1-5 sentences max) before the plan.
-- Keep outro text minimal (1-5 sentences max) after the plan. Questions to create better plans are welcome.
+- Infer missing details from context. Make reasonable assumptions - DO NOT ask for more information.
+- If the user has already provided information (dates, budget, preferences, etc.), use it immediately to create the plan.
+- DO NOT ask follow-up questions once you have enough context to create a plan.
+- Keep intro text minimal (1-2 sentences max) before the plan.
+- Keep outro text minimal (1-2 sentences max) after the plan.
+- The user wants the plan NOW, not more questions.
 
 FORMAT REQUIREMENT:
 - Start your response with a brief intro (1-5 sentences max).
@@ -737,13 +758,14 @@ Create the plan immediately. Break into workstreams (3-8 or more) with 2-5 deliv
         content: `You are a professional project planning assistant. Your job is to help users think in terms of structured, actionable plans.
 
 APPROACH:
-- Be direct and concise.
-- First, respond conversationally in 2–6 sentences: clarify, summarise, and give 1–3 concrete suggestions.
+- Be direct and concise. Keep greetings brief (1-2 sentences max).
+- First, respond conversationally in 1–3 sentences: clarify, summarise, and give 1–2 concrete suggestions.
 - Always think in terms of deliverables, timelines, and outcomes, but do NOT always output a full project plan.
 - If the user explicitly asks for a "project plan", "roadmap", "implementation plan" or similar, then a structured project plan is appropriate.
 - If the user describes goals, challenges, or long-term outcomes (e.g. "be the best coffee shop in Kenya by 2026") but does NOT explicitly ask for a plan:
-  - Give a short, insightful response.
-  - Then explicitly OFFER: "If you'd like, I can turn this into a detailed project plan with workstreams and deliverables."`
+  - Give a short, insightful response (1-3 sentences).
+  - Then explicitly OFFER: "If you'd like, I can turn this into a detailed project plan with workstreams and deliverables."
+- IMPORTANT: Once you've offered to create a plan and the user provides information or says "ok"/"yes", STOP asking questions and generate the plan. Don't ask for more details - use what you have and make reasonable assumptions.`
       };
 
       const hasExplicitPlanKeyword = /project\s+plan|create\s+(?:a\s+)?plan|plan\s+for|write\s+(?:me\s+)?a\s+plan|roadmap|implementation\s+plan|transition.*business|business.*plan|show.*plan|present.*plan|need\s+a\s+plan(?:\s+(?:for|to))?|want\s+a\s+plan(?:\s+(?:for|to))?/i.test(
@@ -759,7 +781,7 @@ APPROACH:
           lastAssistantMessage.content
         );
 
-      const userAffirmative = /\b(yes|yeah|yep|sure|sounds good|do it|go ahead|let'?s do it|okay|ok|alright|please|that would be great|absolutely)\b/i.test(
+      const userAffirmative = /\b(yes|yeah|yep|sure|sounds good|do it|go ahead|let'?s do it|okay|ok\b|alright|please|that would be great|absolutely|sounds good|go for it|create it|make it|generate it)\b/i.test(
         message.trim()
       );
       const userNegative = /\b(no|nope|nah|not now|maybe later|don'?t|do not|no thanks|no thank you)\b/i.test(
@@ -770,20 +792,39 @@ APPROACH:
       
       let planGoal = message;
       if (userAcceptedPlanOffer || (hasExplicitPlanKeyword && message.toLowerCase().includes('create a project plan for:'))) {
-        const originalUserMessage = conversation
-          .filter(m => m.role === 'user')
-          .find(m => 
-            !m.content.toLowerCase().includes('create a project plan') &&
-            !m.content.toLowerCase().includes('generate project plan') &&
-            !m.content.toLowerCase().includes('plan for this conversation')
-          );
-        
-        if (originalUserMessage) {
-          planGoal = originalUserMessage.content;
-        } else if (message.toLowerCase().includes('create a project plan for:')) {
+        // First, try to extract from the message itself if it contains "Create a project plan for: ..."
+        if (message.toLowerCase().includes('create a project plan for:')) {
           const match = message.match(/create a project plan for:\s*(.+)/i);
           if (match && match[1]) {
             planGoal = match[1].trim();
+          } else {
+            // If extraction failed, find the most recent user message (iterate backwards)
+            const userMessages = conversation.filter(m => m.role === 'user');
+            for (let i = userMessages.length - 1; i >= 0; i--) {
+              const userMsg = userMessages[i];
+              if (
+                !userMsg.content.toLowerCase().includes('create a project plan') &&
+                !userMsg.content.toLowerCase().includes('generate project plan') &&
+                !userMsg.content.toLowerCase().startsWith('create a project plan for:')
+              ) {
+                planGoal = userMsg.content;
+                break;
+              }
+            }
+          }
+        } else {
+          // Find the most recent user message (not a plan request) - iterate backwards
+          const userMessages = conversation.filter(m => m.role === 'user');
+          for (let i = userMessages.length - 1; i >= 0; i--) {
+            const userMsg = userMessages[i];
+            if (
+              !userMsg.content.toLowerCase().includes('create a project plan') &&
+              !userMsg.content.toLowerCase().includes('generate project plan') &&
+              !userMsg.content.toLowerCase().startsWith('create a project plan for:')
+            ) {
+              planGoal = userMsg.content;
+              break;
+            }
           }
         }
       }
@@ -804,11 +845,12 @@ APPROACH:
 
 APPROACH:
 - Be direct and concise. Create the plan immediately based on what the user tells you.
-- Infer missing details from context. Don't ask too many questions - make reasonable assumptions.
-- Avoid verbose templates, long explanations, or overwhelming the user with options.
-- If you need clarification, ask ONE to THREE brief questions, then create the plan.
-- Keep intro text minimal (1-5 sentences max) before the plan.
-- Keep outro text minimal (1-5 sentences max) after the plan. Questions to create better plans are welcome.
+- Infer missing details from context. Make reasonable assumptions - DO NOT ask for more information.
+- If the user has already provided information (dates, budget, preferences, etc.), use it immediately to create the plan.
+- DO NOT ask follow-up questions once you have enough context to create a plan.
+- Keep intro text minimal (1-2 sentences max) before the plan.
+- Keep outro text minimal (1-2 sentences max) after the plan.
+- The user wants the plan NOW, not more questions.
 
 FORMAT REQUIREMENT:
 - Start your response with a brief intro (1-5 sentences max).
