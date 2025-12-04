@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "../client";
 import { Chat, SendMessageMutationParams, SendMessageResponse, UpdateChatRequest } from "../../types";
 import { handleApiResponse } from "../../helpers";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 
 export function useCreateChat() {
   const queryClient = useQueryClient();
@@ -48,15 +48,45 @@ export function useStreamMessage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState<string>('');
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [streamingChatId, setStreamingChatId] = useState<string | null>(null);
+  const activeStreamRef = useRef<string | null>(null);
+  const tokenTimestampsRef = useRef<number[]>([]);
+  const batchedContentRef = useRef<string>('');
+  const throttleTimerRef = useRef<number | null>(null);
+  const isFastStreamRef = useRef<boolean>(false);
+  
+  useEffect(() => {
+    return () => {
+      setIsStreaming(false);
+      setStreamingContent('');
+      setStreamError(null);
+      setStreamingChatId(null);
+      activeStreamRef.current = null;
+      tokenTimestampsRef.current = [];
+      batchedContentRef.current = '';
+      if (throttleTimerRef.current) {
+        clearTimeout(throttleTimerRef.current);
+      }
+      isFastStreamRef.current = false;
+    };
+  }, []);
 
   const streamMessage = useCallback(async (
     chatId: string,
     message: string,
     onToken?: (token: string, fullContent: string) => void
   ): Promise<void> => {
+    if (streamingChatId && streamingChatId !== chatId) {
+      setIsStreaming(false);
+      setStreamingContent('');
+      setStreamError(null);
+    }
+    
     setIsStreaming(true);
     setStreamingContent('');
     setStreamError(null);
+    setStreamingChatId(chatId);
+    activeStreamRef.current = chatId;
 
     try {
       const response = await fetch(`http://localhost:8000/chat/${chatId}/message/stream`, {
@@ -80,6 +110,100 @@ export function useStreamMessage() {
       const decoder = new TextDecoder();
       let buffer = '';
       let content = '';
+      let currentEventType: string | null = null;
+      
+      tokenTimestampsRef.current = [];
+      batchedContentRef.current = '';
+      isFastStreamRef.current = false;
+      if (throttleTimerRef.current) {
+        clearTimeout(throttleTimerRef.current);
+        throttleTimerRef.current = null;
+      }
+      
+      const FAST_STREAM_THRESHOLD = 10;
+      const BATCH_INTERVAL = 50;
+      const RATE_WINDOW_SIZE = 10;
+
+      const updateContent = (newContent: string, token: string) => {
+        if (activeStreamRef.current !== chatId) return;
+        
+        if (isFastStreamRef.current) {
+          batchedContentRef.current = newContent;
+          
+          if (!throttleTimerRef.current) {
+            throttleTimerRef.current = window.setTimeout(() => {
+              if (activeStreamRef.current === chatId) {
+                setStreamingContent(batchedContentRef.current);
+                onToken?.(token, batchedContentRef.current);
+              }
+              throttleTimerRef.current = null;
+            }, BATCH_INTERVAL);
+          }
+        } else {
+          setStreamingContent(newContent);
+          onToken?.(token, newContent);
+        }
+      };
+
+      const handleSSEEvent = (eventType: string, data: string) => {
+        if (activeStreamRef.current !== chatId) return;
+        
+        try {
+          const parsed = JSON.parse(data);
+          
+          switch (eventType) {
+            case 'token':
+              if (parsed.token) {
+                content += parsed.token;
+                
+                const now = Date.now();
+                tokenTimestampsRef.current.push(now);
+                
+                if (tokenTimestampsRef.current.length > RATE_WINDOW_SIZE) {
+                  tokenTimestampsRef.current.shift();
+                }
+                
+                if (tokenTimestampsRef.current.length >= 5 && !isFastStreamRef.current) {
+                  const timeSpan = now - tokenTimestampsRef.current[0];
+                  const tokenCount = tokenTimestampsRef.current.length;
+                  const tokensPerSecond = (tokenCount / timeSpan) * 1000;
+                  
+                  if (tokensPerSecond > FAST_STREAM_THRESHOLD) {
+                    isFastStreamRef.current = true;
+                    if (batchedContentRef.current) {
+                      setStreamingContent(batchedContentRef.current);
+                    }
+                  }
+                }
+                
+                updateContent(content, parsed.token);
+              }
+              break;
+              
+            case 'done':
+              if (parsed.chat) {
+                if (throttleTimerRef.current) {
+                  clearTimeout(throttleTimerRef.current);
+                  throttleTimerRef.current = null;
+                }
+                if (batchedContentRef.current) {
+                  setStreamingContent(batchedContentRef.current);
+                }
+                queryClient.invalidateQueries({ queryKey: ["chat", chatId] });
+                queryClient.invalidateQueries({ queryKey: ["chats"] });
+              }
+              break;
+              
+            case 'error':
+              setStreamError(parsed.error || parsed.details || 'Stream error occurred');
+              break;
+          }
+        } catch (e) {
+          if (eventType === 'error' || data.includes('error')) {
+            setStreamError('⚠️ Connection lost. Response may be incomplete.');
+          }
+        }
+      };
 
       try {
         while (true) {
@@ -92,7 +216,7 @@ export function useStreamMessage() {
 
           for (const line of lines) {
             if (line.startsWith('event: ')) {
-              const eventType = line.slice(7).trim();
+              currentEventType = line.slice(7).trim();
               continue;
             }
 
@@ -101,44 +225,49 @@ export function useStreamMessage() {
               
               if (data.trim() === '') continue;
 
-              try {
-                const parsed = JSON.parse(data);
-                
-                if (parsed.token) {
-                  content += parsed.token;
-                  setStreamingContent(content);
-                  onToken?.(parsed.token, content);
-                  // Force a re-render by updating state
-                } else if (parsed.chat) {
-                  queryClient.invalidateQueries({ queryKey: ["chat", chatId] });
-                  queryClient.invalidateQueries({ queryKey: ["chats"] });
-                } else if (parsed.error) {
-                  setStreamError(parsed.error || 'Stream error occurred');
-                }
-              } catch (e) {
-                if (data.includes('error')) {
-                  setStreamError('⚠️ Connection lost. Response may be incomplete.');
-                }
-              }
+              const eventType = currentEventType || 'token';
+              handleSSEEvent(eventType, data);
+              currentEventType = null;
             }
           }
         }
       } finally {
         reader.releaseLock();
-        setIsStreaming(false);
+        if (throttleTimerRef.current) {
+          clearTimeout(throttleTimerRef.current);
+          throttleTimerRef.current = null;
+        }
+        if (batchedContentRef.current && activeStreamRef.current === chatId) {
+          setStreamingContent(batchedContentRef.current);
+        }
+        if (activeStreamRef.current === chatId) {
+          setIsStreaming(false);
+          setStreamingChatId(null);
+          activeStreamRef.current = null;
+          tokenTimestampsRef.current = [];
+          batchedContentRef.current = '';
+          isFastStreamRef.current = false;
+        }
       }
     } catch (err) {
-      setIsStreaming(false);
+      if (activeStreamRef.current === chatId) {
+        setIsStreaming(false);
+        setStreamingChatId(null);
+        activeStreamRef.current = null;
+      }
       const errorMessage = err instanceof Error ? err.message : 'Failed to start stream';
-      setStreamError(errorMessage);
+      if (activeStreamRef.current === chatId) {
+        setStreamError(errorMessage);
+      }
       throw err;
     }
-  }, [queryClient]);
+  }, [queryClient, streamingChatId]);
 
   return {
     streamMessage,
     isStreaming,
     streamingContent,
     streamError,
+    streamingChatId,
   };
 }

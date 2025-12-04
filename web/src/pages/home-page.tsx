@@ -5,7 +5,7 @@ import {useChats, useChat} from "../data/queries/chat";
 import {useCreateChat, useSendMessage, useStreamMessage} from "../data/mutations/chat";
 import {ChatMessage} from "../types";
 import {useChatState} from "../hooks/use-chat-state";
-import {useEffect, useRef, useState} from "react";
+import {useEffect, useRef} from "react";
 import {useToast} from "../components/ui/toast";
 import Spinner from "../components/ui/spinner";
 import {ModelSelector} from "../components/model-selector";
@@ -16,16 +16,23 @@ export function HomePage () {
     const chatQuery = useChat(selectedChatId);
     const createChatMutation = useCreateChat();
     const sendMessageMutation = useSendMessage();
-    const { streamMessage, isStreaming, streamingContent, streamError } = useStreamMessage();
+    const { streamMessage, isStreaming, streamingContent, streamError, streamingChatId } = useStreamMessage();
     const { showToast } = useToast();
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
 
+    const scrollThrottleRef = useRef<number | null>(null);
+    
     useEffect(() => {
         if (chatQuery.data && chatQuery.data.messages.length > 0) {
-            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            if (scrollThrottleRef.current) {
+                clearTimeout(scrollThrottleRef.current);
+            }
+            scrollThrottleRef.current = window.setTimeout(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+                scrollThrottleRef.current = null;
+            }, 100);
         }
-    }, [chatQuery.data?.messages.length, streamingContent]);
+    }, [chatQuery.data, streamingContent]);
 
     useEffect(() => {
         if (!selectedChatId) return;
@@ -37,6 +44,7 @@ export function HomePage () {
             setSelectedChatId(null);
         }
     }, [selectedChatId, chatsQuery.data, chatsQuery.isLoading, chatsQuery.isFetching, setSelectedChatId]);
+
 
     const handleCreateChat = async () => {
         try {
@@ -53,18 +61,9 @@ export function HomePage () {
             return;
         }
         
-        const tempMessageId = `streaming-${Date.now()}`;
-        setStreamingMessageId(tempMessageId);
-        
         try {
-            await streamMessage(selectedChatId, message, (token, fullContent) => {
-                setStreamingMessageId(tempMessageId);
-            });
-            setStreamingMessageId(null);
+            await streamMessage(selectedChatId, message);
         } catch (error) {
-            setStreamingMessageId(null);
-            const errorMessage = error instanceof Error ? error.message : 'Failed to send message';
-            
             if (streamError) {
                 showToast(streamError, 'error');
             } else {
@@ -82,8 +81,9 @@ export function HomePage () {
     const messages: ChatMessage[] = chatQuery.data?.messages || [];
     const isSendingForThisChat =
         (sendMessageMutation.isPending && sendMessageMutation.variables?.chatId === selectedChatId) ||
-        (isStreaming && streamingMessageId !== null);
+        (isStreaming && streamingChatId === selectedChatId);
     const isLoading = isSendingForThisChat || chatQuery.isFetching;
+    const showStreamingForThisChat = isStreaming && streamingChatId === selectedChatId && streamingContent;
 
     if (chatsQuery.isLoading) {
         return (
@@ -109,8 +109,9 @@ export function HomePage () {
                     chatName={chatQuery.data?.name || 'Chat'}
                     chatId={selectedChatId}
                     isChatLoading={chatQuery.isLoading}
-                    streamingContent={isStreaming && streamingMessageId ? streamingContent : null}
+                    streamingContent={showStreamingForThisChat ? streamingContent || '' : null}
                     streamError={streamError}
+                    showStreaming={!!showStreamingForThisChat}
                 />
             ) : (
                 <div className="flex flex-col items-center justify-center h-96">
@@ -130,7 +131,8 @@ function ChatWindow ({
     chatId,
     isChatLoading,
     streamingContent,
-    streamError
+    streamError,
+    showStreaming
 }: { 
     messages: ChatMessage[]; 
     onSend: (message: string) => void;
@@ -140,11 +142,19 @@ function ChatWindow ({
     isChatLoading?: boolean;
     streamingContent?: string | null;
     streamError?: string | null;
+    showStreaming?: boolean;
 }) {
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const scrollThrottleRef = useRef<number | null>(null);
 
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (scrollThrottleRef.current) {
+            clearTimeout(scrollThrottleRef.current);
+        }
+        scrollThrottleRef.current = window.setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            scrollThrottleRef.current = null;
+        }, 100);
     }, [messages.length, isLoading, streamingContent]);
 
     return <div className={"flex flex-col gap-4 h-[calc(100vh-12rem)]"}>
@@ -159,13 +169,19 @@ function ChatWindow ({
                 </div>
             )}
             {messages.map((message, index) => {
-                const originalUserMessage = messages.find(
-                    (m, i) => 
-                        m.role === 'user' && 
-                        i < index &&
-                        !m.content.toLowerCase().includes('create a project plan') &&
-                        !m.content.toLowerCase().includes('generate project plan')
-                );
+                let originalUserMessage: ChatMessage | undefined;
+                for (let i = index - 1; i >= 0; i--) {
+                    const prevMessage = messages[i];
+                    if (
+                        prevMessage.role === 'user' &&
+                        !prevMessage.content.toLowerCase().includes('create a project plan') &&
+                        !prevMessage.content.toLowerCase().includes('generate project plan') &&
+                        !prevMessage.content.toLowerCase().startsWith('create a project plan for:')
+                    ) {
+                        originalUserMessage = prevMessage;
+                        break;
+                    }
+                }
                 
                 const generatePlanMessage = originalUserMessage
                     ? `Create a project plan for: ${originalUserMessage.content}`
@@ -177,14 +193,33 @@ function ChatWindow ({
                         message={message}
                         onGeneratePlan={
                             message.role === 'assistant' && 
-                            message.content.toLowerCase().includes("turn this into a detailed project plan")
+                            (message.content.toLowerCase().includes("turn this into a detailed project plan") ||
+                             message.content.toLowerCase().includes("turn this into a project plan") ||
+                             message.content.toLowerCase().includes("turn this into") ||
+                             message.content.toLowerCase().includes("i can turn this into") ||
+                             message.content.toLowerCase().includes("can turn this into") ||
+                             message.content.toLowerCase().includes("can help you create") ||
+                             message.content.toLowerCase().includes("help you create a project plan") ||
+                             message.content.toLowerCase().includes("create a detailed project plan") ||
+                             message.content.toLowerCase().includes("can create a project plan") ||
+                             message.content.toLowerCase().includes("i can help you create") ||
+                             message.content.toLowerCase().includes("i can create") ||
+                             message.content.toLowerCase().includes("create a project plan") ||
+                             (message.content.toLowerCase().includes("if you'd like") && message.content.toLowerCase().includes("i can help")) ||
+                             message.content.toLowerCase().includes("if you'd like, i can help") ||
+                             message.content.toLowerCase().includes("i can help structure") ||
+                             message.content.toLowerCase().includes("help structure this into") ||
+                             message.content.toLowerCase().includes("structure this into a detailed plan") ||
+                             message.content.toLowerCase().includes("structure this into a plan") ||
+                             message.content.toLowerCase().includes("can help structure") ||
+                             (message.content.toLowerCase().includes("if you'd like") && message.content.toLowerCase().includes("turn this into")))
                                 ? () => onSend(generatePlanMessage)
                                 : undefined
                         }
                     />
                 );
             })}
-            {streamingContent && (
+            {showStreaming && streamingContent && (
                 <MessageDisplay 
                     message={{ role: 'assistant', content: streamingContent }}
                 />
@@ -194,7 +229,7 @@ function ChatWindow ({
                     {streamError}
                 </div>
             )}
-            {isLoading && !streamingContent && <AssistantLoadingIndicator />}
+            {isLoading && !showStreaming && <AssistantLoadingIndicator />}
             <div ref={messagesEndRef} />
         </div>
         <ChatInputBox onSend={onSend} disabled={isLoading} />
