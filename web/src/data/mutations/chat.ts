@@ -89,7 +89,8 @@ export function useStreamMessage() {
     activeStreamRef.current = chatId;
 
     try {
-      const response = await fetch(`http://localhost:8000/chat/${chatId}/message/stream`, {
+      const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
+      const response = await fetch(`${API_BASE_URL}/chat/${chatId}/message/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
