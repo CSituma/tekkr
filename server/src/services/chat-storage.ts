@@ -17,9 +17,8 @@ class ChatStorage {
       userId,
       messages: [],
       createdAt: new Date(),
-      // Default to OpenAI GPT-4o-mini for new chats
-      model: 'gpt-4o-mini',
-      provider: 'openai',
+      model: 'llama-3.3-70b-versatile',
+      provider: 'groq',
     };
 
     this.chats.set(id, chat);
