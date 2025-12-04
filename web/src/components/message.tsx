@@ -32,15 +32,12 @@ export function MessageDisplay({
     message: ChatMessage;
     onGeneratePlan?: () => void;
 }) {
-    const offersPlan = message.role === 'assistant' && 
-        message.content.toLowerCase().includes("turn this into a detailed project plan");
-
     return (
         <MessageContainer role={message.role}>
             <div className="rounded-lg bg-accent px-4 py-2 text-sm">
                 <MessageContent content={message.content} />
             </div>
-            {offersPlan && onGeneratePlan && (
+            {onGeneratePlan && (
                 <div className="mt-2">
                     <Button
                         size="sm"
