@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "../client";
+import { apiClient, API_BASE_URL } from "../client";
 import { Chat, SendMessageMutationParams, SendMessageResponse, UpdateChatRequest } from "../../types";
 import { handleApiResponse } from "../../helpers";
 import { useState, useCallback, useEffect, useRef } from "react";
@@ -89,7 +89,6 @@ export function useStreamMessage() {
     activeStreamRef.current = chatId;
 
     try {
-      const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
       const response = await fetch(`${API_BASE_URL}/chat/${chatId}/message/stream`, {
         method: 'POST',
         headers: {

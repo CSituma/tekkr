@@ -102,8 +102,7 @@ export function extractProjectPlanBlocksIncremental(
 } {
   const state = previousState || { buffer: '', jsonStartIndex: null, parsedPlans: [] };
   const blocks: Array<{ type: 'text' | 'plan'; content: string | ProjectPlan; start: number; end: number }> = [];
-  
-  let searchStart = 0;
+
   let lastProcessedIndex = 0;
 
   const jsonBlockStartRegex = /```(?:json)?\s*(\{)/g;

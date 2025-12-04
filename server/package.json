@@ -9,7 +9,7 @@
   "scripts": {
     "build:ts": "tsc",
     "watch:ts": "tsc -w",
-    "start": "npm run build:ts && concurrently -k -p \"[{name}]\" -n \"TypeScript,App\" -c \"yellow.bold,cyan.bold\" \"npm:watch:ts\" \"npm:dev:start\"",
+    "start": "npm run build:ts && node dist/server.js",
     "dev:start": "fastify start -p 8000 --ignore-watch=.ts$ -w -l info -P dist/app.js"
   },
   "keywords": [],

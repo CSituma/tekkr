@@ -642,13 +642,13 @@ Create the plan immediately. Break into workstreams (3-8 or more) with 2-5 deliv
           fullResponse = await llmService.sendMessage(conversation, model);
           
           // Simulate streaming by chunking the response
-          const chunkSize = 10; // Characters per chunk
+          const chunkSize = 10;
           for (let i = 0; i < fullResponse.length; i += chunkSize) {
             const chunk = fullResponse.substring(i, i + chunkSize);
             if (chunk.length > 0) {
               tokenCount++;
               sendSSE('token', JSON.stringify({ token: chunk }));
-              // Small delay to simulate real streaming
+              // Small delay to simulate real streaming- gemini (NON-SSE)
               await new Promise(resolve => setTimeout(resolve, 20));
             }
           }
@@ -660,7 +660,6 @@ Create the plan immediately. Break into workstreams (3-8 or more) with 2-5 deliv
             tokenCount++;
             
             try {
-              // Send token immediately for real-time streaming
               sendSSE('token', JSON.stringify({ token }));
               if (tokenCount === 1) {
                 fastify.log.info('First token received and sent');
@@ -1110,4 +1109,3 @@ Create the plan immediately. Break into workstreams (3-8 or more) with 2-5 deliv
 };
 
 export default chat;
-

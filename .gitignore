@@ -1,6 +1,16 @@
 .idea/
 .DS_Store
 
+# Dependencies and build artifacts
+node_modules/
+server/node_modules/
+web/node_modules/
+server/dist/
+web/build/
+
+# Local tooling/config
+.vercel/
+
 # Documentation/Planning files (not for GitHub)
 COMMIT_PLAN.md
 QUICK_COMMIT_GUIDE.md

@@ -17,8 +17,9 @@ class ChatStorage {
       userId,
       messages: [],
       createdAt: new Date(),
-      model: 'gemini-2.5-flash',
-      provider: 'gemini',
+      // Default to OpenAI GPT-4o-mini for new chats
+      model: 'gpt-4o-mini',
+      provider: 'openai',
     };
 
     this.chats.set(id, chat);

@@ -6,12 +6,12 @@
   "scripts": {
     "install:all": "npm install && cd server && npm install && cd ../web && npm install",
     "dev": "concurrently -k -p \"[{name}]\" -n \"Backend,Frontend\" -c \"cyan.bold,green.bold\" \"npm run dev:server\" \"npm run dev:web\"",
-    "dev:server": "cd server && npm start",
+    "dev:server": "cd server && npm run dev:start",
     "dev:web": "cd web && npm start",
-    "build": "npm run build:server && npm run build:web",
-    "build:server": "cd server && npm run build:ts",
+    "build": "npm run build:server",
+    "build:server": "cd server && npm ci && npm run build:ts",
     "build:web": "cd web && npm run build",
-    "start": "npm run dev"
+    "start": "cd server && npm start"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

@@ -10,9 +10,9 @@ interface ModelSelectorProps {
 }
 
 const ALLOWED_MODELS: Record<'gemini' | 'openai' | 'groq', string[]> = {
-  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
-  openai: ['gpt-4o-mini'],
   groq: ['llama-'],
+  openai: ['gpt-4o-mini'],
+  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
 };
 
 const getProviderForModel = (
@@ -30,7 +30,7 @@ const getProviderForModel = (
 };
 
 export function ModelSelector({ chatId }: ModelSelectorProps) {
-  const { data: modelsData, isLoading, error } = useLLMModels();
+  const { data: modelsData } = useLLMModels();
   const { data: chat } = useChat(chatId);
   const updateChatMutation = useUpdateChat();
   const { showToast } = useToast();
@@ -78,6 +78,14 @@ export function ModelSelector({ chatId }: ModelSelectorProps) {
     return acc;
   }, {} as Record<'gemini' | 'openai' | 'anthropic' | 'groq', string[]>);
 
+  // Order providers: Groq first so LLaMA 70B is the default, then OpenAI, then Gemini
+  const providerOrder: Array<'groq' | 'openai' | 'gemini' | 'anthropic'> = [
+    'groq',
+    'openai',
+    'gemini',
+    'anthropic',
+  ];
+
   const providerLabels: Record<string, string> = {
     groq: '🚀 Groq',
     gemini: '✨ Gemini',
@@ -118,12 +126,18 @@ export function ModelSelector({ chatId }: ModelSelectorProps) {
             onClick={() => setIsOpen(false)}
           />
           <div className="absolute top-full mt-2 right-0 z-20 bg-background border border-border rounded-md shadow-lg min-w-[280px] max-h-[400px] overflow-y-auto">
-            {Object.keys(groupedModels).length === 0 ? (
+            {providerOrder
+              .filter((provider) => groupedModels[provider]?.length)
+              .length === 0 ? (
               <div className="px-4 py-2 text-sm text-muted-foreground">
                 No models available
               </div>
             ) : (
-              Object.entries(groupedModels).map(([provider, providerModels]) => (
+              providerOrder
+                .filter((provider) => groupedModels[provider]?.length)
+                .map((provider) => {
+                  const providerModels = groupedModels[provider] || [];
+                  return (
                 <div key={provider} className="border-b border-border last:border-b-0">
                   <div className="px-4 py-2 text-xs font-semibold text-muted-foreground bg-muted/50 sticky top-0">
                     {providerLabels[provider] || provider.toUpperCase()}
@@ -145,7 +159,8 @@ export function ModelSelector({ chatId }: ModelSelectorProps) {
                     </button>
                   ))}
                 </div>
-              ))
+                  );
+                })
             )}
           </div>
         </>
